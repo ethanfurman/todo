@@ -1,0 +1,138 @@
+#!/usr/bin/env python
+"""
+todo - a simple, personal, command-line todo manager
+"""
+
+# imports
+
+from __future__ import print_function
+
+from scription import *
+from antipathy import Path
+from os.path import expanduser
+
+import dbf
+
+# globals
+
+home_dir = Path(expanduser('~'))
+config = home_dir / '.todorc'
+store_fields = [
+        'id N(3,0)',
+        'categ C(32)',
+        'subcateg C(32)',
+        'title C(96)',
+        'detail M',
+        'created D',
+        'completed D'
+        ]
+table = None
+TODAY = dbf.Date.today()
+
+# API
+
+@Command(
+        show_completed=('show completed?', FLAG),
+        )
+def todo(show_completed):
+    """
+    List current todos (single-line).
+    """
+    init(_internal=True)
+    print('%d to-do items' % len(table))
+    with table:
+        for todo in table:
+            if show_completed:
+                echo('%3d:  [%10s] %s' % (todo.id, todo.completed, todo.title))
+            elif not todo.completed:
+                echo('%3d:  %s' % (todo.id, todo.title))
+
+
+@Command(
+        category=('category of todo', OPTION),
+        subcategory=('subcategory of todo', OPTION),
+        interactive=('prompt for data [default: True if no summary]', FLAG),
+        summary=('one-line summary of todo', ),
+        )
+def add(category, subcategory, interactive, *summary):
+    """
+    Add a todo.
+    """
+    init(_internal=True)
+    if interactive or not summary:
+        abort('only using a summary is supported at this time')
+    with table:
+        if not table:
+            next_id = 1
+        else:
+            next_id = table[-1].id + 1
+        table.append({'title':' '.join(summary), 'created':TODAY, 'id':next_id})
+
+
+@Command(
+        id=Spec('id of todo to mark as completed', type=int),
+        date=Spec('completion date [default: today]', force_default=TODAY),
+        )
+def complete(id, date):
+    """
+    Mark a todo as completed.
+    """
+    init(_internal=True)
+    with table:
+        for todo in table:
+            if todo.id == id:
+                dbf.write(todo, completed=date)
+
+
+@Command(
+        cutoff=Spec('delete completed items prior to CUTOFF', type=dbf.Date),
+        )
+def purge(cutoff):
+    """
+    Delete a todo.
+    """
+    init(_internal=True)
+    deleted = 0
+    with table:
+        for todo in ViewProgress(table):
+            if todo.completed and todo.completed < cutoff:
+                deleted += 1
+                dbf.delete(todo)
+    if deleted:
+        with table:
+            table.pack()
+    print('%d records removed' % deleted)
+
+
+@Command(
+        name=Spec('name of file to use for to-do list (unique per user)'),
+        force=Spec('replace existing file', FLAG),
+        )
+def init(name=None, force=False, _internal=False):
+    """
+    create todo database and save name in ~/.todorc
+    """
+    global table
+    if not config.exists():
+        if not name:
+            abort('database has not been initialized; use `todo init <filename>` to get started')
+        name = home_dir * name
+        if not name.ext == '.dbf':
+            name += '.dbf'
+        cfg = OrmFile(config, types={'_path':Path})
+        cfg.dbf = name
+        OrmFile.save(cfg)
+    cfg = OrmFile(config, types={'_path':Path})
+    name = cfg.dbf
+    if not name.exists() or force:
+        table = dbf.Table(name, store_fields, default_data_types='enhanced')
+    elif not _internal:
+        # trying to init an existing database
+        abort('database exists; use --force to recreate')
+    else:
+        table = dbf.Table(name, default_data_types='enhanced')
+
+# helpers
+
+# execute
+Main()
